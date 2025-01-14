@@ -2,7 +2,7 @@ use crate::partial::Partial;
 use async_trait::async_trait;
 use axum::extract::{FromRequestParts, OriginalUri};
 use http::{request::Parts, HeaderMap, HeaderValue, StatusCode};
-
+use std::future::Future;
 /// Inertia-related information in the request.
 ///
 /// See more info here: https://inertiajs.com/the-protocol.
@@ -34,50 +34,55 @@ where
 {
     type Rejection = (StatusCode, HeaderMap<HeaderValue>);
 
-    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let original_uri = OriginalUri::from_request_parts(parts, state)
-            .await
-            .unwrap_or_else(|e| match e {});
-        let url = original_uri.0.path().to_string();
-        let is_xhr = parts
-            .headers
-            .get("X-Inertia")
-            .map(|s| s.to_str().map(|s| s == "true"))
-            .transpose()
-            .map_err(|_err| (StatusCode::BAD_REQUEST, HeaderMap::new()))?
-            .unwrap_or(false);
-        let version = parts
-            .headers
-            .get("X-Inertia-Version")
-            .map(|s| s.to_str().map(|s| s.to_string()))
-            .transpose()
-            .map_err(|_err| (StatusCode::BAD_REQUEST, HeaderMap::new()))?;
-        let partial_data = parts
-            .headers
-            .get("X-Inertia-Partial-Data")
-            .map(|s| s.to_str().map(|s| s.to_string()))
-            .transpose()
-            .map(|s| s.map(|s| s.split(',').map(|s| s.to_owned()).collect::<Vec<_>>()))
-            .map_err(|_err| (StatusCode::BAD_REQUEST, HeaderMap::new()))?;
-        let partial_component = parts
-            .headers
-            .get("X-Inertia-Partial-Component")
-            .map(|s| s.to_str().map(|s| s.to_string()))
-            .transpose()
-            .map_err(|_err| (StatusCode::BAD_REQUEST, HeaderMap::new()))?;
-        // TODO: trace warning if we have one of data/component without the other
-        // TODO: should this enforce is_xhr is true?
-        let partial = match (partial_data, partial_component) {
-            (Some(props), Some(component)) => Some(Partial { props, component }),
-            _ => None,
-        };
+    fn from_request_parts(
+        parts: &mut Parts,
+        state: &S,
+    ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
+        async move {
+            let original_uri = OriginalUri::from_request_parts(parts, state)
+                .await
+                .unwrap_or_else(|e| match e {});
+            let url = original_uri.0.path().to_string();
+            let is_xhr = parts
+                .headers
+                .get("X-Inertia")
+                .map(|s| s.to_str().map(|s| s == "true"))
+                .transpose()
+                .map_err(|_err| (StatusCode::BAD_REQUEST, HeaderMap::new()))?
+                .unwrap_or(false);
+            let version = parts
+                .headers
+                .get("X-Inertia-Version")
+                .map(|s| s.to_str().map(|s| s.to_string()))
+                .transpose()
+                .map_err(|_err| (StatusCode::BAD_REQUEST, HeaderMap::new()))?;
+            let partial_data = parts
+                .headers
+                .get("X-Inertia-Partial-Data")
+                .map(|s| s.to_str().map(|s| s.to_string()))
+                .transpose()
+                .map(|s| s.map(|s| s.split(',').map(|s| s.to_owned()).collect::<Vec<_>>()))
+                .map_err(|_err| (StatusCode::BAD_REQUEST, HeaderMap::new()))?;
+            let partial_component = parts
+                .headers
+                .get("X-Inertia-Partial-Component")
+                .map(|s| s.to_str().map(|s| s.to_string()))
+                .transpose()
+                .map_err(|_err| (StatusCode::BAD_REQUEST, HeaderMap::new()))?;
+            // TODO: trace warning if we have one of data/component without the other
+            // TODO: should this enforce is_xhr is true?
+            let partial = match (partial_data, partial_component) {
+                (Some(props), Some(component)) => Some(Partial { props, component }),
+                _ => None,
+            };
 
-        Ok(Request {
-            is_xhr,
-            version,
-            url,
-            partial,
-        })
+            Ok(Request {
+                is_xhr,
+                version,
+                url,
+                partial,
+            })
+        }
     }
 }
 

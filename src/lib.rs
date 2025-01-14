@@ -137,6 +137,8 @@
 //! [axum]: https://crates.io/crates/axum
 //! [Extractor]: https://docs.rs/axum/latest/axum/#extractors
 
+use std::future::Future;
+
 use async_trait::async_trait;
 use axum::extract::{FromRef, FromRequestParts};
 pub use config::InertiaConfig;
@@ -168,24 +170,29 @@ where
 {
     type Rejection = (StatusCode, HeaderMap<HeaderValue>);
 
-    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let config = InertiaConfig::from_ref(state);
-        let request = Request::from_request_parts(parts, state).await?;
+    fn from_request_parts(
+        parts: &mut Parts,
+        state: &S,
+    ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
+        async move {
+            let config = InertiaConfig::from_ref(state);
+            let request = Request::from_request_parts(parts, state).await?;
 
-        // Respond with a 409 conflict if X-Inertia-Version values
-        // don't match for GET requests. See more at:
-        // https://inertiajs.com/the-protocol#asset-versioning
-        if parts.method == "GET"
-            && request.is_xhr
-            && config.version().is_some()
-            && request.version != config.version()
-        {
-            let mut headers = HeaderMap::new();
-            headers.insert("X-Inertia-Location", parts.uri.path().parse().unwrap());
-            return Err((StatusCode::CONFLICT, headers));
+            // Respond with a 409 conflict if X-Inertia-Version values
+            // don't match for GET requests. See more at:
+            // https://inertiajs.com/the-protocol#asset-versioning
+            if parts.method == "GET"
+                && request.is_xhr
+                && config.version().is_some()
+                && request.version != config.version()
+            {
+                let mut headers = HeaderMap::new();
+                headers.insert("X-Inertia-Location", parts.uri.path().parse().unwrap());
+                return Err((StatusCode::CONFLICT, headers));
+            }
+
+            Ok(Inertia::new(request, config))
         }
-
-        Ok(Inertia::new(request, config))
     }
 }
 
