@@ -144,6 +144,10 @@ use page::Page;
 use props::Props;
 use request::Request;
 use response::Response;
+use std::sync::{OnceLock, RwLock};
+use serde_json::json;
+use serde_json::Value;
+
 
 pub mod config;
 mod page;
@@ -152,6 +156,12 @@ pub mod props;
 mod request;
 mod response;
 pub mod vite;
+
+static SHARED_PROPS: OnceLock<RwLock<Value>> = OnceLock::new();
+
+fn shared_props() -> &'static RwLock<Value> {
+    SHARED_PROPS.get_or_init(|| RwLock::new(json!({})))
+}
 
 #[derive(Clone)]
 pub struct Inertia {
@@ -196,12 +206,23 @@ impl Inertia {
     pub fn render<S: Props>(self, component: &str, props: S) -> Response {
         let request = self.request;
         let url = request.url.clone();
+
+        let mut serialized_props = props
+            .serialize(request.partial.as_ref())
+            .expect("serialization failure");
+
+        if let Some(obj) = serialized_props.as_object_mut() {
+            let shared = shared_props().read().unwrap();
+            if let Some(shared_obj) = shared.as_object() {
+                for (k, v) in shared_obj {
+                    obj.entry(k.clone()).or_insert(v.clone());
+                }
+            }
+        }
+
         let page = Page {
             component,
-            props: props
-                .serialize(request.partial.as_ref())
-                // TODO: error handling
-                .expect("serialization failure"),
+            props: serialized_props,
             url,
             version: self.config.version().clone(),
         };
@@ -212,6 +233,18 @@ impl Inertia {
             config: self.config,
         }
     }
+
+    pub async fn share<K, V>(&self, key: K, value: V)
+    where
+        K: Into<String>,
+        V: serde::Serialize,
+    {
+        let mut shared = shared_props().write().unwrap();
+        let mut new_map = shared.as_object().unwrap_or(&serde_json::Map::new()).clone();
+        new_map.insert(key.into(), serde_json::to_value(value).unwrap());
+        *shared = Value::Object(new_map);
+    }
+
 }
 
 #[cfg(test)]
@@ -221,6 +254,15 @@ mod tests {
     use reqwest::StatusCode;
     use serde_json::json;
     use tokio::net::TcpListener;
+    use axum::body::Body;
+    use axum::http::Request as HttpRequest;
+    use serde::Serialize;
+    use crate::tests::axum::body::to_bytes;
+
+    #[derive(Serialize)]
+    struct TestProps {
+        page_key: &'static str,
+    }
 
     #[tokio::test]
     async fn it_works() {
@@ -299,5 +341,45 @@ mod tests {
                 .map(|h| h.to_str().unwrap()),
             Some("/test")
         );
+    }
+
+    #[tokio::test]
+    async fn it_merges_shared_props_into_rendered_props() {
+        // Step 1: Create a fake HTTP request
+        let _fake_http_request = HttpRequest::builder()
+            .uri("/test")
+            .header("Accept", "application/json")
+            .body(Body::empty())
+            .unwrap();
+
+        // Step 2: Create a test Request
+        let req = Request::test_request();
+
+        // Step 3: Create an InertiaConfig (layout is just identity function for testing)
+        let config = InertiaConfig::new(None, Box::new(|page| page));
+
+        // Step 4: Create Inertia instance
+        let inertia = Inertia::new(req, config);
+
+        // Step 5: Share a global prop
+        inertia.share("shared_key", "shared_value").await;
+
+        // Step 6: Render a page with some props
+        let response = inertia
+            .render(
+                "TestComponent",
+                TestProps {
+                    page_key: "page_value",
+                },
+            )
+            .into_response();
+
+        // Step 7: Read the response body
+        let body_bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let body_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+
+        // Step 8: Verify props
+        assert_eq!(body_json["props"]["page_key"], json!("page_value"));
+        assert_eq!(body_json["props"]["shared_key"], json!("shared_value"));
     }
 }
