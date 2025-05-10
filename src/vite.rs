@@ -145,7 +145,7 @@ impl Development {
             .into_string()
         });
 
-        InertiaConfig::new(None, layout)
+        InertiaConfig::new(None, layout, vec![],)
     }
 
     fn build_react_preamble(&self) -> String {
@@ -251,7 +251,7 @@ impl Production {
             .into_string()
         });
 
-        InertiaConfig::new(Some(self.version), layout)
+        InertiaConfig::new(Some(self.version), layout,vec![],)
     }
 }
 

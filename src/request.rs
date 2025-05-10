@@ -5,6 +5,8 @@ use http::{request::Parts, HeaderMap, HeaderValue, StatusCode};
 /// Inertia-related information in the request.
 ///
 /// See more info here: https://inertiajs.com/the-protocol.
+///
+use axum::http::Extensions;
 #[derive(Clone, Debug)]
 pub(crate) struct Request {
     pub(crate) is_xhr: bool,
@@ -12,6 +14,7 @@ pub(crate) struct Request {
     /// When using nested services, the `url` will include the full path.
     pub(crate) url: String,
     pub(crate) partial: Option<Partial>,
+    pub(crate) extensions: Extensions,
 }
 
 impl Request {
@@ -22,6 +25,7 @@ impl Request {
             version: None,
             url: "/foo/bar".to_string(),
             partial: None,
+            extensions: Extensions::new(),
         }
     }
 }
@@ -75,6 +79,8 @@ where
             version,
             url,
             partial,
+            extensions: std::mem::take(&mut parts.extensions),
+
         })
     }
 }
