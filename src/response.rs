@@ -63,7 +63,7 @@ mod tests {
             .to_string()
         };
 
-        let config = InertiaConfig::new(Some("123".to_string()), Box::new(layout));
+        let config = InertiaConfig::new(Some("123".to_string()), Box::new(layout), vec![],);
 
         let response = Response {
             request,

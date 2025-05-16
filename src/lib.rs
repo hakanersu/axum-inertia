@@ -140,10 +140,12 @@
 use axum::extract::{FromRef, FromRequestParts};
 pub use config::InertiaConfig;
 use http::{request::Parts, HeaderMap, HeaderValue, StatusCode};
+use serde_json::Value;
 use page::Page;
 use props::Props;
 use request::Request;
 use response::Response;
+pub use crate::shared_props::SharedProps;
 
 pub mod config;
 mod page;
@@ -152,6 +154,7 @@ pub mod props;
 mod request;
 mod response;
 pub mod vite;
+pub mod shared_props;
 
 #[derive(Clone)]
 pub struct Inertia {
@@ -196,12 +199,31 @@ impl Inertia {
     pub fn render<S: Props>(self, component: &str, props: S) -> Response {
         let request = self.request;
         let url = request.url.clone();
+
+        let mut final_props = props
+            .serialize(request.partial.as_ref())
+            .expect("serialization failure");
+
+        for prop_fn in self.config.shared_props() {
+            let shared = prop_fn();
+            if let Value::Object(shared_map) = shared {
+                if let Value::Object(ref mut props_map) = final_props {
+                    props_map.extend(shared_map);
+                }
+            }
+        }
+
+        if let Some(shared) = request.extensions.get::<SharedProps>() {
+            if let Value::Object(ref mut props_map) = final_props {
+                for (k, v) in &shared.0 {
+                    props_map.insert(k.clone(), v.clone());
+                }
+            }
+        }
+
         let page = Page {
             component,
-            props: props
-                .serialize(request.partial.as_ref())
-                // TODO: error handling
-                .expect("serialization failure"),
+            props: final_props,
             url,
             version: self.config.version().clone(),
         };
@@ -231,7 +253,7 @@ mod tests {
         let layout =
             Box::new(|props| format!(r#"<html><body><div id="app" data-page='{}'></div>"#, props));
 
-        let config = InertiaConfig::new(Some("123".to_string()), layout);
+        let config = InertiaConfig::new(Some("123".to_string()), layout,vec![],);
 
         let app = Router::new()
             .route("/test", get(handler))
@@ -267,7 +289,7 @@ mod tests {
         let layout =
             Box::new(|props| format!(r#"<html><body><div id="app" data-page='{}'></div>"#, props));
 
-        let inertia = InertiaConfig::new(Some("123".to_string()), layout);
+        let inertia = InertiaConfig::new(Some("123".to_string()), layout,vec![],);
 
         let app = Router::new()
             .route("/test", get(handler))
